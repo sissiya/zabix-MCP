@@ -1,0 +1,71 @@
+#
+# Zabbix MCP Server
+# Copyright (C) 2026 initMAX s.r.o.
+#
+# Usage:
+#   cp config.example.toml config.toml   # edit with your Zabbix details
+#   cp .env.example .env                 # set MCP_AUTH_TOKEN, WEBUI_SECRET_KEY, and Ollama settings
+#   docker compose up -d                 # start
+#   docker compose logs -f               # view logs
+#   docker compose down                  # stop
+#
+# Upgrade:
+#   git pull
+#   docker compose up -d --build
+#
+
+services:
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    depends_on:
+      zabbix-mcp-server:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      WEBUI_AUTH: "false"
+      ENABLE_PERSISTENT_CONFIG: "false"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?Set WEBUI_SECRET_KEY in .env}"
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"type":"mcp","url":"http://zabbix-mcp-server:${MCP_PORT:-8080}/mcp","path":"/mcp","auth_type":"bearer","key":"${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}","config":{"enable":true},"info":{"id":"zabbix","name":"Zabbix MCP","description":"Zabbix monitoring tools"}}]
+
+  zabbix-mcp-server:
+    build: .
+    container_name: zabbix-mcp-server
+    restart: unless-stopped
+    # MCP_HOST  - host interface to bind on the Docker host (default: 127.0.0.1)
+    # MCP_PORT  - port used inside the container and exposed on the Docker host (default: 8080)
+    # Set these in .env to override without editing this file.
+    command: ["--config", "/etc/zabbix-mcp/config.toml", "--host", "0.0.0.0", "--port", "${MCP_PORT:-8080}"]
+    ports:
+      - "${MCP_HOST:-127.0.0.1}:${MCP_PORT:-8080}:${MCP_PORT:-8080}"
+      - "${MCP_HOST:-127.0.0.1}:${ADMIN_PORT:-9090}:${ADMIN_PORT:-9090}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN in .env}
+      - ADMIN_PORT=${ADMIN_PORT:-9090}
+    volumes:
+      - ./config.toml:/etc/zabbix-mcp/config.toml
+      - assets:/etc/zabbix-mcp/assets
+      - tls:/etc/zabbix-mcp/tls
+      - templates:/etc/zabbix-mcp/templates
+      - logs:/var/log/zabbix-mcp
+    healthcheck:
+      test: ["CMD", "/opt/zabbix-mcp/venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MCP_PORT:-8080}/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  openwebui_data:
+  assets:
+  tls:
+  templates:
+  logs:
